@@ -1,0 +1,8 @@
+# Elevator Simulaor system requirements
+#
+# This file documents system-level C++ dependencies.
+# It is not a Python requirements file and
+# should not be installed with pip.
+
+C++17-compatible compiler (clang++ or g++)
+Make
