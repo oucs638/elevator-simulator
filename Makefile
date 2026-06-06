@@ -4,11 +4,12 @@ CPPFLAGS ?= -I src
 LDLIBS ?= -lncurses
 
 simulator_binary := elevator_simulator
-simulator_sources := src/main.cc
+simulator_headers := src/elevator.h
+simulator_sources := src/main.cc src/elevator.cc
 
 .PHONY: all run clean
 
-all: $(simulator_binary)
+all: $(simulator_binary): $(simulator_sources) $(simulator_headers)
 
 $(simulator_binary): $(simulator_sources)
   @$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ $(simulator_sources) $(LDLIBS)
