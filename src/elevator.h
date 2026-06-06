@@ -1,6 +1,9 @@
+// Defines the state and behavior of one elevator car.
+
 #ifndef ELEVATOR_SIMULATOR_SRC_ELEVATOR_H_
 #define ELEVATOR_SIMULATOR_SRC_ELEVATOR_H_
 
+#include <deque>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -67,8 +70,12 @@ class Elevator {
 
  private:
   int id_;
+  std::deque<ElevatorRequest> queue_;
+  std::optional<ElevatorRequest> active_request_;
+  bool busy_;
+  std::optional<int> target_floor_;
   ElevatorStage stage_;
-  std::string staus_;
+  std::string status_;
   std::string display_text_;
 };
 
