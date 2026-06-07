@@ -1,5 +1,6 @@
 elevator_simulator
 elevator_tests
+elevator_client
 *.o
 *.out
 .DS_Store
