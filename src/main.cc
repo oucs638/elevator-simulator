@@ -241,6 +241,64 @@ int DrawStatusView(const std::vector<ElevatorSnapshot>& snapshots, int top,
   return row;
 }
 
+void HandleDispatchResult(const DispatchResult& result,
+                          std::deque<ActivityMessage>* messages) {
+  messages->push_front(
+      {result.message, result.accepted ? result.elevator_id : 0});
+}
+
+// Parses automatic two-number and manual three-number simulator commands.
+void ParseCommand(const std::string& command, ElevatorSystem* system,
+                  std::deque<ActivityMessage>* messages) {
+  std::istringstream stream(command);
+  std::vector<int> values;
+  int value = 0;
+
+  while (stream >> value) {
+    values.push_back(value);
+  }
+
+  if (!stream.eof() || (values.size() != 2 && values.size() != 3)) {
+    messages->push_front({
+        "Use auto: <current> <destination> or manual: <elevator> <current> "
+        "<destination>.",
+        0,
+    });
+    return;
+  }
+
+  if (values.size() == 2) {
+    HandleDispatchResult(system->DispatchNearest(values[0], values[1]),
+                         messages);
+    return;
+  }
+
+  HandleDispatchResult(system->SubmitManual(values[0], values[1], values[2]),
+                       messages);
+}
+
+// Removes successful activity entries after the assigned elevator becomes idle.
+void RemoveCompletedActivities(std::deque<ActivityMessage>* messages,
+                               const std::vector<ElevatorSnapshot>& snapshots) {
+  messages->erase(
+      std::remove_if(messages->begin(), messages->end(),
+                     [&snapshots](const ActivityMessage& message) {
+                       if (message.elevator_id == 0) {
+                         return false;
+                       }
+
+                       const auto elevator = std::find_if(
+                           snapshots.begin(), snapshots.end(),
+                           [&message](const ElevatorSnapshot& snapshot) {
+                             return snapshot.id == message.elevator_id;
+                           });
+
+                       return elevator != snapshots.end() && !elevator->busy &&
+                              elevator->queued_requests.empty();
+                     }),
+      messages->end());
+}
+
 }  // namespace
 
 int main() {
@@ -265,13 +323,38 @@ int main() {
   nodelay(stdscr, TRUE);
   curs_set(1);
 
+  std::string input;
+  std::deque<ActivityMessage> messages;
+
   bool running = true;
 
   while (running) {
+    // Nonblocking input keeps rendering independent from elevator movement.
     int ch = getch();
+    while (ch != ERR) {
+      if (ch == '\n' || ch == '\r') {
+        if (!input.empty()) {
+          if (input == "quit") {
+            running = false;
+            break;
+          } else {
+            ParseCommand(input, &system, &messages);
+            while (static_cast<int>(messages.size()) > kMessageLimit) {
+              messages.pop_back();
+            }
+            input.clear();
+          }
+        }
+      } else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+        if (!input.empty()) {
+          input.pop_back();
+        }
+      } else if (ch >= 0 && ch <= UCHAR_MAX &&
+                 std::isprint(static_cast<unsigned char>(ch))) {
+        input.push_back(static_cast<char>(ch));
+      }
 
-    if (ch == 'q') {
-      running = false;
+      ch = getch();
     }
 
     erase();
@@ -291,9 +374,39 @@ int main() {
     PrintAt(0, 2, max_x - 4, "Elevator Simulator");
 
     const auto snapshots = system.Snapshots();
-
+    RemoveCompletedActivities(&messages, snapshots);
     DrawBuildingView(snapshots, 3, 1, max_x - 2);
-    DrawStatusView(snapshots, 17, 1, max_x - 2);
+    const int status_bottom = DrawStatusView(snapshots, 17, 1, max_x - 2);
+
+    int message_y = status_bottom + 1;
+    attron(A_BOLD);
+    PrintAt(message_y++, 2, max_x - 4, "Activity");
+    attroff(A_BOLD);
+
+    const int prompt_y = max_y - 2;
+    const int available_message_rows = prompt_y - message_y - 1;
+    int rendered_messages = 0;
+    for (const auto& message : messages) {
+      if (rendered_messages >= available_message_rows) {
+        break;
+      }
+      PrintAt(message_y++, 2, max_x - 4, message.text);
+      ++rendered_messages;
+    }
+
+    const int instruction_y = prompt_y - 1;
+    mvhline(instruction_y - 1, 1, '-', max_x - 2);
+
+    PrintAt(instruction_y, 2, max_x - 4,
+            "Commands: <from> <to>  |  <elevator> <from> <to>  |  quit");
+    const std::string prompt = "Command > " + input;
+    attron(A_BOLD);
+
+    PrintAt(prompt_y, 2, max_x - 4, prompt);
+
+    attroff(A_BOLD);
+
+    move(prompt_y, std::min(max_x - 2, 2 + static_cast<int>(prompt.size())));
 
     refresh();
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
