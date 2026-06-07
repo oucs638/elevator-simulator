@@ -12,10 +12,10 @@ endif
 test_sources := tests/elevator_tests.cc src/elevator.cc src/elevator_system.cc
 
 simulator_binary := elevator_simulator
-simulator_headers := src/elevator.h src/elevator_system.h
-simulator_sources := src/main.cc src/elevator.cc src/elevator_system.cc
+simulator_headers := src/elevator.h src/elevator_system.h src/remote_control_server.h
+simulator_sources := src/main.cc src/elevator.cc src/elevator_system.cc src/remote_control_server.cc
 test_binary := elevator_tests
-test_sources := tests/elevator_tests.cc src/elevator.cc src/elevator_system.cc
+test_sources := tests/elevator_tests.cc src/elevator.cc src/elevator_system.cc src/remote_control_server.cc
 
 .PHONY: all run test clean
 

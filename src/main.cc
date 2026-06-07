@@ -17,6 +17,7 @@
 
 #include "elevator.h"
 #include "elevator_system.h"
+#include "remote_control_server.h"
 
 using elevator_simulator::DispatchResult;
 using elevator_simulator::Elevator;
@@ -25,11 +26,12 @@ using elevator_simulator::ElevatorRequestType;
 using elevator_simulator::ElevatorSnapshot;
 using elevator_simulator::ElevatorStage;
 using elevator_simulator::ElevatorSystem;
+using elevator_simulator::RemoteControlServer;
 
 namespace {
 
 constexpr int kMessageLimit = 6;
-
+constexpr int kDefaultRemotePort = 5050;
 constexpr std::array<std::string_view, 7> kStatusHeaders{
     "Elevator", "Floor", "Direction", "Stage", "Target", "Active", "Queue",
 };
@@ -310,10 +312,18 @@ int main() {
   std::vector<Elevator*> elevators{&elevator1, &elevator2, &elevator3,
                                    &elevator4};
 
+  // Local and remote interfaces share one system and one elevator bank.
   ElevatorSystem system(elevators);
+  RemoteControlServer remote_server(system);
 
   for (auto* elevator : elevators) {
     elevator->Start();
+  }
+
+  std::string remote_error;
+  if (!remote_server.Start(kDefaultRemotePort, &remote_error)) {
+    std::cerr << remote_error << "\n";
+    return 1;
   }
 
   initscr();
@@ -413,7 +423,7 @@ int main() {
   }
 
   endwin();
-
+  remote_server.Stop();
   for (auto* elevator : elevators) {
     elevator->Stop();
   }

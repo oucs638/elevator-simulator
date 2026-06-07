@@ -11,6 +11,7 @@
 
 #include "../src/elevator.h"
 #include "../src/elevator_system.h"
+#include "../src/remote_control_server.h"
 
 namespace {
 
@@ -18,6 +19,7 @@ using elevator_simulator::Elevator;
 using elevator_simulator::ElevatorRequestType;
 using elevator_simulator::ElevatorStage;
 using elevator_simulator::ElevatorSystem;
+using elevator_simulator::RemoteControlServer;
 using std::chrono_literals::operator""ms;
 
 std::vector<std::string>* g_current_failures = nullptr;
@@ -430,6 +432,67 @@ void DispatchUsesDirectionAsTieBreaker() {
          "Direction must break an equal-wait tie.");
 }
 
+void RemoteCallReturnsTrackableEvent() {
+  Elevator elevator1(1, 1, 0ms);
+  Elevator elevator2(2, 5, 0ms);
+  Elevator elevator3(3, 9, 0ms);
+  RunningElevators running({&elevator1, &elevator2, &elevator3});
+  ElevatorSystem system({&elevator1, &elevator2, &elevator3});
+
+  const std::string response =
+      RemoteControlServer::ExecuteCommand(&system, "call 8 2");
+
+  Expect(response.find("EVENT|3|") != std::string::npos,
+         "Remote call must identify its elevator.");
+  Expect(response.find("Call 8 -> 2 assigned to E3") != std::string::npos,
+         "Remote call must describe its assignment.");
+}
+
+void RemoteSendMovesOnlySelectedElevator() {
+  Elevator elevator1(1, 1, 0ms);
+  Elevator elevator2(2, 5, 0ms);
+  RunningElevators running({&elevator1, &elevator2});
+  ElevatorSystem system({&elevator1, &elevator2});
+
+  const std::string response =
+      RemoteControlServer::ExecuteCommand(&system, "send 2 9");
+
+  Expect(response.find("Sending elevator 2 to floor 9") != std::string::npos,
+         "Remote send must describe the selected elevator and floor.");
+  Expect(elevator2.WaitUntilIdle(1000ms),
+         "The direct-send trip must complete.");
+  Expect(elevator2.Snapshot().current_floor == 9,
+         "The selected elevator must reach floor 9.");
+  Expect(elevator1.Snapshot().current_floor == 1,
+         "Remote send must not move another elevator.");
+}
+
+void RemoteCommandsValidateSyntaxAndReportStatus() {
+  Elevator elevator(1, 4, 0ms);
+  ElevatorSystem system({&elevator});
+
+  const std::string help = RemoteControlServer::ExecuteCommand(&system, "help");
+  const std::string status =
+      RemoteControlServer::ExecuteCommand(&system, "status");
+  const std::string malformed_call =
+      RemoteControlServer::ExecuteCommand(&system, "call 3");
+  const std::string invalid_floor =
+      RemoteControlServer::ExecuteCommand(&system, "call 0 5");
+  const std::string unknown =
+      RemoteControlServer::ExecuteCommand(&system, "open doors");
+
+  Expect(help.find("call <from> <to>") != std::string::npos,
+         "Remote help must document call.");
+  Expect(status.find("E1 | floor 4") != std::string::npos,
+         "Remote status must report live floors.");
+  Expect(malformed_call.find("Use: call") != std::string::npos,
+         "Malformed calls must return usage guidance.");
+  Expect(invalid_floor.find("Floors must be from 1 to 10") != std::string::npos,
+         "Out-of-range calls must return a validation error.");
+  Expect(unknown.find("Unknown command") != std::string::npos,
+         "Unknown remote commands must return a clear error.");
+}
+
 using TestFunction = std::function<void()>;
 
 int RunTests(const std::vector<std::pair<std::string, TestFunction>>& tests) {
@@ -467,5 +530,10 @@ int main() {
       {"DispatchUsesQueuedRouteInsteadOfCurrentPositionOnly",
        DispatchUsesQueuedRouteInsteadOfCurrentPositionOnly},
       {"DispatchUsesDirectionAsTieBreaker", DispatchUsesDirectionAsTieBreaker},
+      {"RemoteCallReturnsTrackableEvent", RemoteCallReturnsTrackableEvent},
+      {"RemoteSendMovesOnlySelectedElevator",
+       RemoteSendMovesOnlySelectedElevator},
+      {"RemoteCommandsValidateSyntaxAndReportStatus",
+       RemoteCommandsValidateSyntaxAndReportStatus},
   });
 }
