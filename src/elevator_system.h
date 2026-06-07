@@ -72,6 +72,15 @@ class ElevatorSystem {
 
   bool IsValidFloor(int floor) const;
   Elevator* FindElevator(int elevator_id) const;
+
+  // Builds and sorts dispatch candidates while dispatch_mutex_ is held.
+  DispatchPlan BuildDispatchPlan(int current, int destination) const;
+
+  // Creates the dispatch metadata for one elevator.
+  DispatchCandidate BuildCandidate(const ElevatorSnapshot& snapshot,
+                                   int current, int destination) const;
+  // Simulates pending route segments to estimate passenger waiting time.
+  int EstimateWaitSeconds(const ElevatorSnapshot& snapshot, int current) const;
 };
 
 }  // namespace elevator_simulator

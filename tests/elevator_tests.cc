@@ -380,6 +380,56 @@ void ManualDispatchUsesRequestedElevator() {
          "The requested elevator must reach the destination.");
 }
 
+void DispatchUsesQueuedRouteInsteadOfCurrentPositionOnly() {
+  Elevator busy_elevator(1, 5, 100ms);
+  Elevator available_elevator(2, 1, 0ms);
+  RunningElevators running({&busy_elevator, &available_elevator});
+  busy_elevator.SubmitRequest(5, 10);
+
+  Expect(WaitForStage(busy_elevator, ElevatorStage::kToDestination, 1000ms),
+         "The busy elevator must begin its existing trip.");
+
+  ElevatorSystem system({&busy_elevator, &available_elevator});
+  const auto plan = system.PlanDispatch(5, 1);
+
+  Expect(plan.valid, "A valid passenger request must produce a dispatch plan.");
+  Expect(plan.selected_elevator_id == 2,
+         "The dispatcher must select the lower-wait elevator.");
+  if (Expect(plan.candidates.size() >= 2,
+             "The plan must include both elevators.")) {
+    Expect(plan.candidates.front().elevator_id == 2,
+           "The best candidate must rank first.");
+    Expect(plan.candidates.front().estimated_wait_seconds <
+               plan.candidates.back().estimated_wait_seconds,
+           "The available elevator must have a shorter estimated wait.");
+  }
+}
+
+void DispatchUsesDirectionAsTieBreaker() {
+  Elevator moving_up(1, 1, 1000ms);
+  Elevator idle_above_caller(2, 8, 0ms);
+  RunningElevators running({&moving_up, &idle_above_caller});
+  moving_up.SubmitRequest(1, 3);
+
+  Expect(WaitForStage(moving_up, ElevatorStage::kToDestination, 1000ms),
+         "The first elevator must begin moving upward.");
+
+  ElevatorSystem system({&moving_up, &idle_above_caller});
+  const auto plan = system.PlanDispatch(4, 10);
+
+  Expect(plan.valid, "A valid passenger request must produce a plan.");
+  if (Expect(plan.candidates.size() >= 2,
+             "The plan must include both elevators.")) {
+    Expect(plan.candidates[0].estimated_wait_seconds ==
+               plan.candidates[1].estimated_wait_seconds,
+           "The test setup must produce equal estimated waits.");
+    Expect(plan.candidates[0].same_direction,
+           "The first candidate must match passenger direction.");
+  }
+  Expect(plan.selected_elevator_id == 1,
+         "Direction must break an equal-wait tie.");
+}
+
 using TestFunction = std::function<void()>;
 
 int RunTests(const std::vector<std::pair<std::string, TestFunction>>& tests) {
@@ -414,5 +464,8 @@ int main() {
        EmptySystemCannotCreateDispatchPlan},
       {"ManualDispatchUsesRequestedElevator",
        ManualDispatchUsesRequestedElevator},
+      {"DispatchUsesQueuedRouteInsteadOfCurrentPositionOnly",
+       DispatchUsesQueuedRouteInsteadOfCurrentPositionOnly},
+      {"DispatchUsesDirectionAsTieBreaker", DispatchUsesDirectionAsTieBreaker},
   });
 }
