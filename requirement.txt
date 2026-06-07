@@ -1,8 +1,12 @@
-# Elevator Simulaor system requirements
+# Elevator Simulator system requirements
 #
-# This file documents system-level C++ dependencies.
-# It is not a Python requirements file and
-# should not be installed with pip.
+# This file documents system-level C++ dependencies. It is not a Python
+# requirements file and should not be installed with pip.
 
 C++17-compatible compiler (clang++ or g++)
 Make
+ncurses development library
+POSIX threads support
+POSIX TCP socket support
+Terminal with at least 82 x 27 characters for the main simulator
+Terminal with at least 82 x 20 characters for the remote dashboard
