@@ -10,12 +10,14 @@
 #include <vector>
 
 #include "../src/elevator.h"
+#include "../src/elevator_system.h"
 
 namespace {
 
 using elevator_simulator::Elevator;
 using elevator_simulator::ElevatorRequestType;
 using elevator_simulator::ElevatorStage;
+using elevator_simulator::ElevatorSystem;
 using std::chrono_literals::operator""ms;
 
 std::vector<std::string>* g_current_failures = nullptr;
@@ -314,6 +316,70 @@ void TwoElevatorsMoveConcurrently() {
          "Elevator 2 must reach floor 1.");
 }
 
+void NearestElevatorIsAutoDispatched() {
+  Elevator elevator_1(1, 1, 0ms);
+  Elevator elevator_2(2, 5, 0ms);
+  Elevator elevator_3(3, 9, 0ms);
+  RunningElevators running({&elevator_1, &elevator_2, &elevator_3});
+  ElevatorSystem system({&elevator_1, &elevator_2, &elevator_3});
+
+  const auto result = system.DispatchNearest(8, 2);
+
+  Expect(result.accepted, "A valid passenger request must be accepted.");
+  Expect(result.elevator_id == 3,
+         "The closest idle elevator must be selected.");
+  Expect(system.WaitUntilAllIdle(1000ms), "The dispatched trip must complete.");
+  Expect(elevator_3.Snapshot().current_floor == 2,
+         "The selected elevator must reach the destination.");
+}
+
+void DispatchRejectsInvalidPassengerRequests() {
+  Elevator elevator(1, 1, 0ms);
+  ElevatorSystem system({&elevator});
+
+  Expect(!system.DispatchNearest(0, 5).accepted,
+         "A floor below kMinFloor must be rejected.");
+  Expect(!system.DispatchNearest(5, 11).accepted,
+         "A floor above kMaxFloor must be rejected.");
+  Expect(!system.DispatchNearest(5, 5).accepted,
+         "A zero-distance passenger trip must be rejected.");
+  Expect(!system.SubmitManual(9, 1, 5).accepted,
+         "An unknown manual elevator ID must be rejected.");
+  Expect(!system.SendElevator(1, 0).accepted,
+         "A direct send outside the building must be rejected.");
+  Expect(!system.SendElevator(9, 5).accepted,
+         "A direct send to an unknown elevator must be rejected.");
+}
+
+void EmptySystemCannotCreateDispatchPlan() {
+  ElevatorSystem system({});
+
+  const auto plan = system.PlanDispatch(3, 8);
+
+  Expect(!plan.valid,
+         "An empty elevator bank must not create a valid dispatch plan.");
+  Expect(plan.candidates.empty(),
+         "An empty elevator bank must not return candidates.");
+}
+
+void ManualDispatchUsesRequestedElevator() {
+  Elevator elevator_1(1, 1, 0ms);
+  Elevator elevator_2(2, 5, 0ms);
+  RunningElevators running({&elevator_1, &elevator_2});
+  ElevatorSystem system({&elevator_1, &elevator_2});
+
+  const auto result = system.SubmitManual(2, 5, 9);
+
+  Expect(result.accepted, "A valid manual request must be accepted.");
+  Expect(result.elevator_id == 2,
+         "Manual dispatch must retain the requested elevator ID.");
+  Expect(system.WaitUntilAllIdle(1000ms), "The manual trip must complete.");
+  Expect(elevator_1.Snapshot().current_floor == 1,
+         "Manual dispatch must not move another elevator.");
+  Expect(elevator_2.Snapshot().current_floor == 9,
+         "The requested elevator must reach the destination.");
+}
+
 using TestFunction = std::function<void()>;
 
 int RunTests(const std::vector<std::pair<std::string, TestFunction>>& tests) {
@@ -341,5 +407,12 @@ int main() {
        StopInterruptsActiveTripAndClearsQueue},
       {"QueuedRequestsRunInFifoOrder", QueuedRequestsRunInFifoOrder},
       {"TwoElevatorsMoveConcurrently", TwoElevatorsMoveConcurrently},
+      {"NearestElevatorIsAutoDispatched", NearestElevatorIsAutoDispatched},
+      {"DispatchRejectsInvalidPassengerRequests",
+       DispatchRejectsInvalidPassengerRequests},
+      {"EmptySystemCannotCreateDispatchPlan",
+       EmptySystemCannotCreateDispatchPlan},
+      {"ManualDispatchUsesRequestedElevator",
+       ManualDispatchUsesRequestedElevator},
   });
 }

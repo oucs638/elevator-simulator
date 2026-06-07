@@ -9,11 +9,13 @@ CPPFLAGS += -isysroot $(sdk_root) -isystem $(sdk_root)/usr/include/c++/v1
 endif
 
 
+test_sources := tests/elevator_tests.cc src/elevator.cc src/elevator_system.cc
+
 simulator_binary := elevator_simulator
-simulator_headers := src/elevator.h
-simulator_sources := src/main.cc src/elevator.cc
+simulator_headers := src/elevator.h src/elevator_system.h
+simulator_sources := src/main.cc src/elevator.cc src/elevator_system.cc
 test_binary := elevator_tests
-test_sources := tests/elevator_tests.cc src/elevator.cc
+test_sources := tests/elevator_tests.cc src/elevator.cc src/elevator_system.cc
 
 .PHONY: all run test clean
 
