@@ -26,7 +26,7 @@ $(simulator_binary): $(simulator_sources) $(simulator_headers)
 	@echo "Built $(simulator_binary)"
 
 run: $(simulator_binary)
-	@./$(simulator_binar)
+	@./$(simulator_binary)
 
 $(test_binary): $(test_sources) $(simulator_headers)
 	@$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ $(test_sources)
