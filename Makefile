@@ -1,9 +1,12 @@
+# Builds the elevator simulator, remote dashboard, and unit tests.
+
 CXX ?= g++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -pedantic -pthread
 CPPFLAGS ?= -I src
 LDLIBS ?= -lncurses
-sdk_root ?= $(shell xcrun --show-sdk-path 2>/dev/null)
 
+# For macOS
+sdk_root ?= $(shell xcrun --show-sdk-path 2>/dev/null)
 ifneq ($(sdk_root),)
 CPPFLAGS += -isysroot $(sdk_root) -isystem $(sdk_root)/usr/include/c++/v1
 endif
