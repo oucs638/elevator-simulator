@@ -43,6 +43,7 @@ struct DispatchResult {
 // Coordinates passenger requests and direct sends across multiple elevators.
 class ElevatorSystem {
  public:
+  // Stores non-owning elevator pointers used for dispatch decisions.
   explicit ElevatorSystem(std::vector<Elevator*> elevators);
 
   // Ranks elevators for a passenger journey without submitting the request.

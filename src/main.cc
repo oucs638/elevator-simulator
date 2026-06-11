@@ -32,16 +32,19 @@ namespace {
 
 constexpr int kMessageLimit = 6;
 constexpr int kDefaultRemotePort = 5050;
+
+// Fixed labels for the main UI elevator status table.
 constexpr std::array<std::string_view, 7> kStatusHeaders{
     "Elevator", "Floor", "Direction", "Stage", "Target", "Active", "Queue",
 };
 
+// Tracks one main-UI activity line and its related elevator, if any.
 struct ActivityMessage {
   std::string text;
   int elevator_id;
 };
 
-// Truncates text without allowing a UI field to overwrite adjacent content.
+// Truncates text so ncurses output stays within a fixed column width.
 std::string TrimToWidth(std::string_view text, int width) {
   if (width <= 0) {
     return "";
@@ -51,6 +54,7 @@ std::string TrimToWidth(std::string_view text, int width) {
     return std::string(text);
   }
 
+  // Use raw truncation when the column is too narrow for an ellipsis.
   if (width <= 3) {
     return std::string(text.substr(0, static_cast<std::size_t>(width)));
   }
@@ -59,6 +63,7 @@ std::string TrimToWidth(std::string_view text, int width) {
          "...";
 }
 
+// Prints bounded text at a fixed ncurses row and column.
 void PrintAt(int y, int x, int width, std::string_view text) {
   if (width <= 0) {
     return;
@@ -67,6 +72,7 @@ void PrintAt(int y, int x, int width, std::string_view text) {
   mvaddnstr(y, x, TrimToWidth(text, width).c_str(), width);
 }
 
+// Prints text centered between two ncurses column boundaries.
 void PrintCentered(int y, int left, int right, std::string_view text) {
   const int available_width = right - left - 1;
   if (available_width <= 0) {
@@ -81,7 +87,7 @@ void PrintCentered(int y, int left, int right, std::string_view text) {
   mvaddnstr(y, x, visible_text.c_str(), available_width);
 }
 
-// Draws the ten-floor building view and current position of each elevator.
+// Draws the main floor grid and places each elevator on its current floor.
 void DrawBuildingView(const std::vector<ElevatorSnapshot>& snapshots, int top,
                       int left, int width) {
   constexpr int kHeight = 13;
@@ -97,16 +103,19 @@ void DrawBuildingView(const std::vector<ElevatorSnapshot>& snapshots, int top,
   boundaries.push_back(left);
   boundaries.push_back(left + kFloorColumnSpan);
 
+  // Split remaining width evenly across the elevator columns.
   for (int index = 1; index <= elevator_count; ++index) {
     boundaries.push_back(left + kFloorColumnSpan +
                          (remaining_span * index) / elevator_count);
   }
 
+  // Draw top and bottom borders.
   for (int x = left + 1; x < right; ++x) {
     mvaddch(top, x, '-');
     mvaddch(bottom, x, '-');
   }
 
+  // Draw vertical borders at each computed column boundary.
   for (const int boundary : boundaries) {
     for (int y = top + 1; y < bottom; ++y) {
       mvaddch(y, boundary, '|');
@@ -115,17 +124,20 @@ void DrawBuildingView(const std::vector<ElevatorSnapshot>& snapshots, int top,
     mvaddch(bottom, boundary, '+');
   }
 
+  // Draw column headers.
   PrintCentered(top + 1, boundaries[0], boundaries[1], "Floor");
   for (int index = 0; index < elevator_count; ++index) {
     PrintCentered(top + 1, boundaries[index + 1], boundaries[index + 2],
                   "Elevator " + std::to_string(snapshots[index].id));
   }
 
+  // Draw floors from top to bottom so higher floors appear higher on screen.
   for (int floor = Elevator::kMaxFloor; floor >= Elevator::kMinFloor; --floor) {
     const int row = top + 2 + (Elevator::kMaxFloor - floor);
     PrintCentered(row, boundaries[0], boundaries[1],
                   std::to_string(floor) + "F");
 
+    // Place each elevator marker on the row matching its current floor.
     for (int index = 0; index < elevator_count; ++index) {
       const auto& snapshot = snapshots[index];
       if (floor != snapshot.current_floor) {
@@ -140,6 +152,7 @@ void DrawBuildingView(const std::vector<ElevatorSnapshot>& snapshots, int top,
   }
 }
 
+// Converts signed movement direction into main-UI display text.
 std::string DirectionText(int direction) {
   if (direction > 0) {
     return "Up";
@@ -150,6 +163,7 @@ std::string DirectionText(int direction) {
   return "Stopped";
 }
 
+// Converts elevator stages into main-UI display labels.
 std::string StageText(ElevatorStage stage) {
   switch (stage) {
     case ElevatorStage::kIdle:
@@ -168,21 +182,26 @@ std::string StageText(ElevatorStage stage) {
   return "--";
 }
 
+// Formats one request for compact main-UI status output.
 std::string RequestText(const ElevatorRequest& request) {
   if (request.type == ElevatorRequestType::kDirectSend) {
     return "send->" + std::to_string(request.destination);
   }
+
   return std::to_string(request.current) + "->" +
          std::to_string(request.destination);
 }
 
+// Returns the active request text or a placeholder when the car is idle.
 std::string ActiveText(const ElevatorSnapshot& snapshot) {
   if (!snapshot.active_request.has_value()) {
     return "--";
   }
+
   return RequestText(*snapshot.active_request);
 }
 
+// Joins queued requests into one compact status-table field.
 std::string QueueText(const ElevatorSnapshot& snapshot) {
   if (snapshot.queued_requests.empty()) {
     return "--";
@@ -196,10 +215,11 @@ std::string QueueText(const ElevatorSnapshot& snapshot) {
     }
     stream << RequestText(snapshot.queued_requests[index]);
   }
+
   return stream.str();
 }
 
-// Draws live elevator state using the same columns as remote control.
+// Draws the main elevator status table and returns the divider row.
 int DrawStatusView(const std::vector<ElevatorSnapshot>& snapshots, int top,
                    int left, int width) {
   const int right = left + width - 1;
@@ -208,6 +228,7 @@ int DrawStatusView(const std::vector<ElevatorSnapshot>& snapshots, int top,
       left + 46, left + 56, left + 69,
   };
 
+  // Draw a highlighted header row using fixed status-table columns.
   attron(A_REVERSE | A_BOLD);
   mvhline(top, left, ' ', width);
   for (std::size_t index = 0; index < kStatusHeaders.size(); ++index) {
@@ -217,6 +238,7 @@ int DrawStatusView(const std::vector<ElevatorSnapshot>& snapshots, int top,
   }
   attroff(A_REVERSE | A_BOLD);
 
+  // Render one snapshot per row without reading shared elevator state directly.
   int row = top + 1;
   for (const auto& snapshot : snapshots) {
     PrintAt(row, columns[0], columns[1] - columns[0] - 1,
@@ -236,6 +258,7 @@ int DrawStatusView(const std::vector<ElevatorSnapshot>& snapshots, int top,
     ++row;
   }
 
+  // Draw the divider below the table and report its row to the caller.
   for (int x = left; x <= right; ++x) {
     mvaddch(row, x, '-');
   }
@@ -243,23 +266,27 @@ int DrawStatusView(const std::vector<ElevatorSnapshot>& snapshots, int top,
   return row;
 }
 
+// Adds a dispatch result to the main activity panel.
 void HandleDispatchResult(const DispatchResult& result,
                           std::deque<ActivityMessage>* messages) {
+  // Link successful messages to an elevator so completion can remove them.
   messages->push_front(
       {result.message, result.accepted ? result.elevator_id : 0});
 }
 
-// Parses automatic two-number and manual three-number simulator commands.
+// Parses the main UI command line and submits auto or manual dispatch.
 void ParseCommand(const std::string& command, ElevatorSystem* system,
                   std::deque<ActivityMessage>* messages) {
   std::istringstream stream(command);
   std::vector<int> values;
   int value = 0;
 
+  // The main UI accepts numeric commands only.
   while (stream >> value) {
     values.push_back(value);
   }
 
+  // Accept exactly two numbers for auto mode or three for manual mode.
   if (!stream.eof() || (values.size() != 2 && values.size() != 3)) {
     messages->push_front({
         "Use auto: <current> <destination> or manual: <elevator> <current> "
@@ -269,22 +296,25 @@ void ParseCommand(const std::string& command, ElevatorSystem* system,
     return;
   }
 
+  // Two values mean auto dispatch: current floor and destination.
   if (values.size() == 2) {
     HandleDispatchResult(system->DispatchNearest(values[0], values[1]),
                          messages);
     return;
   }
 
+  // Three values mean manual dispatch: elevator ID, current, and destination.
   HandleDispatchResult(system->SubmitManual(values[0], values[1], values[2]),
                        messages);
 }
 
-// Removes successful activity entries after the assigned elevator becomes idle.
+// Removes activity entries whose related elevator has finished all work.
 void RemoveCompletedActivities(std::deque<ActivityMessage>* messages,
                                const std::vector<ElevatorSnapshot>& snapshots) {
   messages->erase(
       std::remove_if(messages->begin(), messages->end(),
                      [&snapshots](const ActivityMessage& message) {
+                       // General messages are not tied to elevator completion.
                        if (message.elevator_id == 0) {
                          return false;
                        }
@@ -295,6 +325,7 @@ void RemoveCompletedActivities(std::deque<ActivityMessage>* messages,
                              return snapshot.id == message.elevator_id;
                            });
 
+                       // Remove only after active and queued work are finished.
                        return elevator != snapshots.end() && !elevator->busy &&
                               elevator->queued_requests.empty();
                      }),
@@ -303,7 +334,9 @@ void RemoveCompletedActivities(std::deque<ActivityMessage>* messages,
 
 }  // namespace
 
+// Runs the main ncurses simulator and shared remote-control server.
 int main() {
+  // Keep assignment-required elevator variable names visible in main().
   Elevator elevator1(1);
   Elevator elevator2(2);
   Elevator elevator3(3);
@@ -316,16 +349,19 @@ int main() {
   ElevatorSystem system(elevators);
   RemoteControlServer remote_server(system);
 
+  // Start each elevator's worker before accepting local or remote commands.
   for (auto* elevator : elevators) {
     elevator->Start();
   }
 
+  // Start the remote server so the second terminal can attach with make remote.
   std::string remote_error;
   if (!remote_server.Start(kDefaultRemotePort, &remote_error)) {
     std::cerr << remote_error << "\n";
     return 1;
   }
 
+  // Initialize ncurses in nonblocking input mode for continuous rendering.
   initscr();
   cbreak();
   noecho();
@@ -348,7 +384,10 @@ int main() {
             running = false;
             break;
           } else {
+            // Submit the completed local command and record the result.
             ParseCommand(input, &system, &messages);
+
+            // Keep the activity panel bounded by removing oldest messages.
             while (static_cast<int>(messages.size()) > kMessageLimit) {
               messages.pop_back();
             }
@@ -373,6 +412,7 @@ int main() {
     int max_x = 0;
     getmaxyx(stdscr, max_y, max_x);
 
+    // Avoid drawing overlapping panels when the terminal is too small.
     if (max_y < 27 || max_x < 82) {
       PrintAt(1, 2, max_x - 4,
               "Please enlarge the terminal to at least 82 x 27.");
@@ -383,11 +423,13 @@ int main() {
 
     PrintAt(0, 2, max_x - 4, "Elevator Simulator");
 
+    // Render from snapshots so UI never reads elevator internals directly.
     const auto snapshots = system.Snapshots();
     RemoveCompletedActivities(&messages, snapshots);
     DrawBuildingView(snapshots, 3, 1, max_x - 2);
     const int status_bottom = DrawStatusView(snapshots, 17, 1, max_x - 2);
 
+    // Draw the activity panel below the status table.
     int message_y = status_bottom + 1;
     attron(A_BOLD);
     PrintAt(message_y++, 2, max_x - 4, "Activity");
@@ -396,6 +438,8 @@ int main() {
     const int prompt_y = max_y - 2;
     const int available_message_rows = prompt_y - message_y - 1;
     int rendered_messages = 0;
+
+    // Stop before the command area so activity cannot overlap the prompt.
     for (const auto& message : messages) {
       if (rendered_messages >= available_message_rows) {
         break;
@@ -407,22 +451,27 @@ int main() {
     const int instruction_y = prompt_y - 1;
     mvhline(instruction_y - 1, 1, '-', max_x - 2);
 
+    // Keep command help directly above the editable input line.
     PrintAt(instruction_y, 2, max_x - 4,
             "Commands: <from> <to>  |  <elevator> <from> <to>  |  quit");
+
     const std::string prompt = "Command > " + input;
     attron(A_BOLD);
-
     PrintAt(prompt_y, 2, max_x - 4, prompt);
-
     attroff(A_BOLD);
 
+    // Place the cursor after the current input without exceeding screen width.
     move(prompt_y, std::min(max_x - 2, 2 + static_cast<int>(prompt.size())));
 
     refresh();
+
+    // Limit redraw frequency so the nonblocking loop does not spin the CPU.
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
   }
 
+  // Restore the terminal before stopping background server and workers.
   endwin();
+
   remote_server.Stop();
   for (auto* elevator : elevators) {
     elevator->Stop();

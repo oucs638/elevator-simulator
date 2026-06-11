@@ -23,11 +23,13 @@ using elevator_simulator::ElevatorSystem;
 using elevator_simulator::RemoteControlServer;
 using std::chrono_literals::operator""ms;
 
+// Points to the failure list for the currently running test case.
 std::vector<std::string>* g_current_failures = nullptr;
 
 // Starts and stops a collection of elevators for the lifetime of a test.
 class RunningElevators {
  public:
+  // Starts each elevator so asynchronous requests can be processed.
   explicit RunningElevators(std::initializer_list<Elevator*> elevators)
       : elevators_(elevators) {
     for (auto* elevator : elevators_) {
@@ -35,6 +37,7 @@ class RunningElevators {
     }
   }
 
+  // Stops all elevators before the test scope exits.
   ~RunningElevators() {
     for (auto* elevator : elevators_) {
       elevator->Stop();
@@ -69,6 +72,7 @@ bool WaitForCondition(Predicate predicate, std::chrono::milliseconds timeout) {
   return predicate();
 }
 
+// Waits until one elevator reports a specific movement stage.
 bool WaitForStage(const Elevator& elevator, ElevatorStage stage,
                   std::chrono::milliseconds timeout) {
   return WaitForCondition(
@@ -76,6 +80,7 @@ bool WaitForStage(const Elevator& elevator, ElevatorStage stage,
       timeout);
 }
 
+// Verifies that constructor clamps invalid starting floors into range.
 void ConstructorClampsStartingFloor() {
   Elevator below_minimum(1, -5, 0ms);
   Elevator above_maximum(2, 50, 0ms);
@@ -86,6 +91,7 @@ void ConstructorClampsStartingFloor() {
          "A starting floor above the building must clamp to kMaxFloor.");
 }
 
+// Verifies that a passenger move ends at the requested destination.
 void DirectMoveArrivesAtDestination() {
   Elevator elevator(1, 1, 0ms);
 
@@ -101,6 +107,7 @@ void DirectMoveArrivesAtDestination() {
          "The completed move must clear its active request.");
 }
 
+// Verifies that snapshots expose direction, target, and active request state.
 void SnapshotReportsDirectionTargetAndStage() {
   Elevator elevator(1, 1, 100ms);
   RunningElevators running({&elevator});
@@ -121,6 +128,7 @@ void SnapshotReportsDirectionTargetAndStage() {
   }
 }
 
+// Verifies that waiting for idle can time out while the car is still moving.
 void WaitUntilIdleTimesOutWhileMoving() {
   Elevator elevator(1, 1, 300ms);
   RunningElevators running({&elevator});
@@ -132,6 +140,7 @@ void WaitUntilIdleTimesOutWhileMoving() {
          "WaitUntilIdle must time out while the elevator is moving.");
 }
 
+// Verifies that Stop() interrupts movement and clears queued work.
 void StopInterruptsActiveTripAndClearsQueue() {
   Elevator elevator(1, 1, 500ms);
   elevator.Start();
@@ -155,6 +164,7 @@ void StopInterruptsActiveTripAndClearsQueue() {
          "The interrupted elevator must not reach its destination.");
 }
 
+// Verifies that queued requests are processed in FIFO order.
 void QueuedRequestsRunInFifoOrder() {
   Elevator elevator(1, 1, 40ms);
   RunningElevators running({&elevator});
@@ -190,6 +200,7 @@ void QueuedRequestsRunInFifoOrder() {
          "FIFO processing must finish at the second destination.");
 }
 
+// Verifies that independent elevator workers can move concurrently.
 void TwoElevatorsMoveConcurrently() {
   Elevator elevator1(1, 1, 20ms);
   Elevator elevator2(2, 10, 20ms);
@@ -215,6 +226,7 @@ void TwoElevatorsMoveConcurrently() {
          "Elevator 2 must reach floor 1.");
 }
 
+// Verifies that auto dispatch selects the nearest suitable elevator.
 void NearestElevatorIsAutoDispatched() {
   Elevator elevator1(1, 1, 0ms);
   Elevator elevator2(2, 5, 0ms);
@@ -232,6 +244,7 @@ void NearestElevatorIsAutoDispatched() {
          "The selected elevator must reach the destination.");
 }
 
+// Verifies that invalid passenger, manual, and direct-send requests fail.
 void DispatchRejectsInvalidPassengerRequests() {
   Elevator elevator(1, 1, 0ms);
   ElevatorSystem system({&elevator});
@@ -250,6 +263,7 @@ void DispatchRejectsInvalidPassengerRequests() {
          "A direct send to an unknown elevator must be rejected.");
 }
 
+// Verifies that an empty elevator bank cannot produce a valid dispatch plan.
 void EmptySystemCannotCreateDispatchPlan() {
   ElevatorSystem system({});
 
@@ -261,6 +275,7 @@ void EmptySystemCannotCreateDispatchPlan() {
          "An empty elevator bank must not return candidates.");
 }
 
+// Verifies that manual dispatch queues work on the requested elevator only.
 void ManualDispatchUsesRequestedElevator() {
   Elevator elevator1(1, 1, 0ms);
   Elevator elevator2(2, 5, 0ms);
@@ -279,6 +294,7 @@ void ManualDispatchUsesRequestedElevator() {
          "The requested elevator must reach the destination.");
 }
 
+// Verifies that dispatch scoring accounts for active and queued route work.
 void DispatchUsesQueuedRouteInsteadOfCurrentPositionOnly() {
   Elevator busy_elevator(1, 5, 100ms);
   Elevator available_elevator(2, 1, 0ms);
@@ -304,6 +320,7 @@ void DispatchUsesQueuedRouteInsteadOfCurrentPositionOnly() {
   }
 }
 
+// Verifies that direction match breaks equal-wait dispatch ties.
 void DispatchUsesDirectionAsTieBreaker() {
   Elevator moving_up(1, 1, 1000ms);
   Elevator idle_above_caller(2, 8, 0ms);
@@ -329,6 +346,7 @@ void DispatchUsesDirectionAsTieBreaker() {
          "Direction must break an equal-wait tie.");
 }
 
+// Verifies that remote call commands return trackable activity events.
 void RemoteCallReturnsTrackableEvent() {
   Elevator elevator1(1, 1, 0ms);
   Elevator elevator2(2, 5, 0ms);
@@ -345,6 +363,7 @@ void RemoteCallReturnsTrackableEvent() {
          "Remote call must describe its assignment.");
 }
 
+// Verifies that remote send commands move only the selected elevator.
 void RemoteSendMovesOnlySelectedElevator() {
   Elevator elevator1(1, 1, 0ms);
   Elevator elevator2(2, 5, 0ms);
@@ -364,6 +383,7 @@ void RemoteSendMovesOnlySelectedElevator() {
          "Remote send must not move another elevator.");
 }
 
+// Verifies remote help, status, validation, and unknown-command responses.
 void RemoteCommandsValidateSyntaxAndReportStatus() {
   Elevator elevator(1, 4, 0ms);
   ElevatorSystem system({&elevator});
@@ -390,8 +410,10 @@ void RemoteCommandsValidateSyntaxAndReportStatus() {
          "Unknown remote commands must return a clear error.");
 }
 
+// Stores one named no-argument test case.
 using TestFunction = std::function<void()>;
 
+// Runs all tests, prints individual results, and returns a process status.
 int RunTests(const std::vector<std::pair<std::string, TestFunction>>& tests) {
   int failures = 0;
 
@@ -419,6 +441,7 @@ int RunTests(const std::vector<std::pair<std::string, TestFunction>>& tests) {
 
 }  // namespace
 
+// Registers the test suite and returns the runner's exit code.
 int main() {
   return RunTests({
       {"ConstructorClampsStartingFloor", ConstructorClampsStartingFloor},

@@ -7,8 +7,7 @@
 
 namespace elevator_simulator {
 
-// Explicit constructor that initializes configuration parameters,
-// enforces floor boundaries, and prepares runtime state control flags.
+// Initializes an elevator in a valid idle state without starting its worker.
 Elevator::Elevator(int id, int start_floor,
                    std::chrono::milliseconds floor_delay)
     : current_floor(std::clamp(start_floor, kMinFloor, kMaxFloor)),
@@ -20,102 +19,101 @@ Elevator::Elevator(int id, int start_floor,
       worker_started_(false),
       busy_(false),
       stage_(ElevatorStage::kIdle) {
+  // Keep status fields consistent with the clamped starting floor.
   status_ = "Idle";
-  // Safely refresh the initial UI text layout before any worker thread runs.
   DisplayFloorLocked();
 }
 
-// Destructor that automatically ensures the background thread is synchronously
-// terminated and all shared resource lifecycles are properly aligned.
-Elevator::~Elevator() {
-  // Trigger graceful shutdown and join the worker thread before memory
-  // deallocation.
-  Stop();
-}
+// Ensures the worker thread is stopped before destroying elevator state.
+Elevator::~Elevator() { Stop(); }
 
-// Spins up the background worker thread to start processing elevator requests.
-// Guarantees safe initialization and prevents accidental double-activation.
+// Starts the elevator worker thread if it has not been started.
 void Elevator::Start() {
-  // Lock must be held to check flags and construct the thread atomically.
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // Starting twice would create multiple consumers for the same request queue.
   if (worker_started_) {
     return;
   }
 
-  // Set control flags prior to thread birth to prevent initialization race
-  // conditions.
+  // Mark the worker as active before exposing the thread to the scheduler.
   running_ = true;
   worker_started_ = true;
 
-  // Spawn the background universe, binding the member function to the current
-  // object instance.
+  // Build a background thread.
   worker_ = std::thread(&Elevator::WorkerLoop, this);
 }
 
-// Stops the elevator operation and shuts down the background thread safely.
-// Blocks the caller until the worker thread has completely terminated.
+// Stops the worker thread and cancels pending elevator requests.
 void Elevator::Stop() {
   {
-    // Modify running state and purge queue under lock protection.
+    // Limit the lock scope so join() never waits while holding mutex_.
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Signal the worker loop to exit and discard work that has not started.
     running_ = false;
     queue_.clear();
-  }  // Scope ends here to release the lock early and prevent deadlocks.
+  }
 
-  // Wake up all threads sleeping on condition variables to let them exit.
+  // Wake workers and waiters so they can observe the stopped state.
   queue_cv_.notify_all();
   idle_cv_.notify_all();
 
-  // Synchronously join the worker thread to prevent dangling references during
-  // destruction.
+  // Join after releasing the mutex because the worker may lock it while
+  // exiting.
   if (worker_.joinable()) {
     worker_.join();
   }
 }
 
-// Appends a passenger trip request to the dispatch queue.
-// Signals the background worker thread to process the new task.
+// Queues a passenger trip for the elevator worker.
 void Elevator::SubmitRequest(int current, int floor) {
   {
-    // Package and enqueue the request under lock protection.
+    // Limit the lock scope so the worker can acquire mutex_ after notification.
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Passenger trips include both pickup and destination service.
     queue_.push_back({current, floor, ElevatorRequestType::kPassengerTrip});
+
+    // Do not overwrite active movement status while the car is already busy.
     if (!busy_) {
       status_ = "Request queued";
     }
-  }  // Lock is released here before signaling to maximize concurrency.
+  }
 
-  // Wake up a single sleeping worker thread to prevent thundering herd.
+  // Wake the worker if it is waiting for new queued work.
   queue_cv_.notify_one();
 }
 
-// Appends a direct send command from remote control to the dispatch queue.
-// Assumes the current elevator floor as the starting point.
+// Queues a central-control direct send for the elevator worker.
 void Elevator::SubmitDirectRequest(int floor) {
   {
-    // Package and enqueue the command under lock protection.
+    // Limit the lock scope so the worker can acquire mutex_ after notification.
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Direct sends skip pickup service and move straight to the target floor.
     queue_.push_back({current_floor, floor, ElevatorRequestType::kDirectSend});
+
+    // Do not overwrite active movement status while the car is already busy.
     if (!busy_) {
       status_ = "Remote send queued";
     }
-  }  // Lock is released here before signaling to maximize concurrency.
+  }
 
-  // Wake up a single sleeping worker thread to prevent thundering herd.
+  // Wake the worker if it is waiting for new queued work.
   queue_cv_.notify_one();
 }
 
-// Explicitly refreshes and displays the current floor under lock protection.
+// Locks shared elevator state before updating the assignment-facing display.
 void Elevator::display_floor() {
   std::lock_guard<std::mutex> lock(mutex_);
   DisplayFloorLocked();
 }
 
-// Executes a full passenger trip sequence synchronously on the calling thread.
-// Handles pickup, passenger boarding delays, and transit to final destination.
+// Runs a complete passenger trip from pickup to destination.
 void Elevator::move(int current, int floor) {
   {
-    // Initialize initial state machine variables and text markers under lock.
+    // Publish the active pickup target without holding the lock during travel.
     std::lock_guard<std::mutex> lock(mutex_);
     busy_ = true;
     active_request_ = ElevatorRequest{current, floor};
@@ -123,16 +121,16 @@ void Elevator::move(int current, int floor) {
     stage_ = ElevatorStage::kToPickup;
     status_ = "Going to passenger floor " + std::to_string(current);
     DisplayFloorLocked();
-  }  // Lock released early to allow non-blocking physics movement.
+  }
 
-  // Phase 1: Transit to the passenger's floor.
+  // Travel to the caller first; Stop() can interrupt between floors.
   if (!TravelTo(current, ElevatorStage::kToPickup,
                 "Going to passenger floor " + std::to_string(current))) {
     FinishMove("Stopped");
     return;
   }
 
-  // Phase 2: Open doors and wait for the passenger to board.
+  // Simulate door service while the passenger boards at the caller floor.
   SetStatus(ElevatorStage::kBoarding,
             "Passenger boarding at floor " + std::to_string(current));
   display_floor();
@@ -141,14 +139,14 @@ void Elevator::move(int current, int floor) {
     return;
   }
 
-  // Phase 3: Transit to the final destination floor.
+  // Carry the passenger to the requested destination floor.
   if (!TravelTo(floor, ElevatorStage::kToDestination,
                 "Going to destination floor " + std::to_string(floor))) {
     FinishMove("Stopped");
     return;
   }
 
-  // Phase 4: Arrive and open doors before entering idle shutdown.
+  // Show arrival briefly, then clear active state back to idle.
   SetStatus(ElevatorStage::kArrived,
             "Arrived at floor " + std::to_string(floor));
   display_floor();
@@ -156,12 +154,10 @@ void Elevator::move(int current, int floor) {
   FinishMove("Idle");
 }
 
-// Executes a direct remote dispatch sequence synchronously on the calling
-// thread. Transitions the elevator straight to the destination without any
-// mid-way pickup.
+// Runs a remote-control direct send without passenger pickup or boarding.
 void Elevator::MoveDirect(int floor) {
   {
-    // Initialize direct send metadata and state machine flags under lock.
+    // Publish the direct-send target without holding the lock during travel.
     std::lock_guard<std::mutex> lock(mutex_);
     busy_ = true;
     active_request_ =
@@ -171,9 +167,9 @@ void Elevator::MoveDirect(int floor) {
     status_ =
         "Remote control sending elevator to floor " + std::to_string(floor);
     DisplayFloorLocked();
-  }  // Lock released early to unblock state monitoring during transit.
+  }
 
-  // Phase 1: Transit straight to the specified floor.
+  // Move straight to the requested floor; Stop() can interrupt between floors.
   if (!TravelTo(floor, ElevatorStage::kToDestination,
                 "Remote control sending elevator to floor " +
                     std::to_string(floor))) {
@@ -181,8 +177,7 @@ void Elevator::MoveDirect(int floor) {
     return;
   }
 
-  // Phase 2: Open doors upon arrival before releasing the elevator back to
-  // Idle.
+  // Show direct-send arrival briefly, then clear active state back to idle.
   SetStatus(ElevatorStage::kArrived,
             "Remote send arrived at floor " + std::to_string(floor));
   display_floor();
@@ -190,16 +185,11 @@ void Elevator::MoveDirect(int floor) {
   FinishMove("Idle");
 }
 
-// Generates a thread-safe, immutable snapshot of the current elevator state.
-// Used primarily by UIs or dispatchers to query metrics without blocking
-// workers.
+// Returns a locked copy of elevator state for UI, dispatching, and tests.
 ElevatorSnapshot Elevator::Snapshot() const {
-  // Lock is required to maintain a consistent state view during copy
-  // initialization.
   std::lock_guard<std::mutex> lock(mutex_);
 
-  // Evaluate the movement direction safely by unpacking the optional target
-  // floor.
+  // Derive display and dispatch direction from the active target floor.
   int direction = 0;
   if (target_floor_.has_value()) {
     direction = (*target_floor_ > current_floor)
@@ -207,59 +197,48 @@ ElevatorSnapshot Elevator::Snapshot() const {
                     : (*target_floor_ < current_floor ? -1 : 0);
   }
 
-  // Construct and return the snapshot struct by value, copying the underlying
-  // deque into a vector.
+  // Copy queued work so callers cannot mutate queue_ directly.
+  const std::vector<ElevatorRequest> queued_requests(queue_.begin(),
+                                                     queue_.end());
+
   return ElevatorSnapshot{
-      id_,
-      current_floor,
-      busy_,
-      active_request_,
-      std::vector<ElevatorRequest>(queue_.begin(), queue_.end()),
-      target_floor_,
-      direction,
-      stage_,
-      status_,
-      display_text_,
+      id_,           current_floor, busy_,  active_request_, queued_requests,
+      target_floor_, direction,     stage_, status_,         display_text_,
   };
 }
 
-// Blocks the caller until the elevator becomes idle or the timeout expires.
-// Returns true if the elevator successfully reached the idle state, false on
-// timeout.
+// Waits until this elevator has no active or queued work, or times out.
 bool Elevator::WaitUntilIdle(std::chrono::milliseconds timeout) const {
-  // Lock is required by the condition variable to safely evaluate the idle
-  // predicate.
+  // condition_variable requires unique_lock so it can unlock while waiting.
   std::unique_lock<std::mutex> lock(mutex_);
+  // The predicate handles spurious wakeups and confirms the car is fully idle.
   return idle_cv_.wait_for(lock, timeout,
                            [this] { return !busy_ && queue_.empty(); });
 }
 
-// Continuous background loop that consumes and executes elevator requests.
-// Sleeps efficiently when idle and terminates cleanly upon shutdown.
+// Consumes queued requests on the elevator worker thread.
 void Elevator::WorkerLoop() {
   while (true) {
     ElevatorRequest request{};
 
     {
-      // Wait passively until a new request is queued or shutdown is initiated.
-      // Lambda predicate protects against spurious wakeups.
       std::unique_lock<std::mutex> lock(mutex_);
+
+      // Wait until work arrives or Stop() asks the worker to exit.
       queue_cv_.wait(lock, [this] { return !running_ || !queue_.empty(); });
 
-      // Gracefully exit the thread if the system is shutting down and no tasks
-      // remain.
+      // Exit only after Stop() is requested and no queued work remains.
       if (!running_ && queue_.empty()) {
         return;
       }
 
-      // Fetch the next task and update the state machine within the critical
-      // section.
+      // Remove one FIFO request and publish it as the active request.
       request = queue_.front();
       queue_.pop_front();
       busy_ = true;
       active_request_ = request;
 
-      // Determine targets and update stage tags using strong-typed enums.
+      // Passenger trips target pickup first; direct sends target destination.
       target_floor_ = request.type == ElevatorRequestType::kDirectSend
                           ? request.destination
                           : request.current;
@@ -270,11 +249,9 @@ void Elevator::WorkerLoop() {
                     ? "Remote send accepted"
                     : "Request accepted";
       DisplayFloorLocked();
-    }  // Lock is released automatically here to unblock producers during
-       // physical movement.
+    }
 
-    // Execute time-consuming physical motion outside the critical section to
-    // maximize throughput.
+    // Execute long-running movement outside the lock to keep state observable.
     if (request.type == ElevatorRequestType::kDirectSend) {
       MoveDirect(request.destination);
     } else {
@@ -283,13 +260,12 @@ void Elevator::WorkerLoop() {
   }
 }
 
-// Moves the elevator floor-by-floor toward the target destination.
-// Returns true upon successful arrival, or false if interrupted by shutdown.
+// Moves one floor at a time toward a target and returns false if stopped.
 bool Elevator::TravelTo(int target, ElevatorStage stage,
                         const std::string& status) {
   while (true) {
     {
-      // Phase 1: Update target parameters and state tags under lock.
+      // Publish the current travel target and status before each floor step.
       std::lock_guard<std::mutex> lock(mutex_);
       if (!running_) {
         return false;
@@ -300,22 +276,18 @@ bool Elevator::TravelTo(int target, ElevatorStage stage,
       status_ = status;
       DisplayFloorLocked();
 
-      // Stop processing if the elevator has already arrived at the target.
       if (current_floor == target) {
         return true;
       }
-    }  // Lock released to allow concurrent status queries during physical
-       // delay.
+    }
 
-    // Simulate physical transit delay. Returns false if interrupted by
-    // shutdown.
+    // Wait outside the lock so snapshots and Stop() remain responsive.
     if (!SleepInterruptibly(floor_delay_)) {
       return false;
     }
 
     {
-      // Phase 2: Re-acquire lock to increment/decrement the physical floor
-      // safely.
+      // Advance exactly one floor after the simulated travel delay.
       std::lock_guard<std::mutex> lock(mutex_);
       if (!running_) {
         return false;
@@ -327,61 +299,53 @@ bool Elevator::TravelTo(int target, ElevatorStage stage,
   }
 }
 
-// Performs a simulation delay that can be immediately interrupted by a shutdown
-// signal. Returns true if the sleep completed fully, or false if aborted early
-// by shutdown.
+// Sleeps for a delay but returns false if Stop() interrupts the wait.
 bool Elevator::SleepInterruptibly(std::chrono::milliseconds duration) const {
-  // Lock is mandatory for the condition variable to safely check the running
-  // flag.
+  // wait_for needs unique_lock so it can release mutex_ while sleeping.
   std::unique_lock<std::mutex> lock(mutex_);
+
+  // wait_for returns true when stopped, so invert it for "completed normally".
   return !idle_cv_.wait_for(lock, duration, [this] { return !running_; });
 }
 
-// Updates the elevator's status and stages, while resetting the target floor.
-// This enforces an immediate state change and halts any further movement.
+// Publishes a non-travel stage such as boarding or arrival.
 void Elevator::SetStatus(ElevatorStage stage, const std::string& status) {
-  // Lock is required to atomically modify the state machine and refresh the
-  // display.
   std::lock_guard<std::mutex> lock(mutex_);
 
-  // Set target to current floor to effectively cancel any active movement
-  // requests.
+  // Non-travel stages occur at the current floor, so direction becomes stopped.
   target_floor_ = current_floor;
   stage_ = stage;
   status_ = status;
   DisplayFloorLocked();
 }
 
-// Cleans up the elevator state upon completing a movement and signals waiting
-// threads. Transitions the state machine to idle or stopped and clears active
-// requests.
+// Clears active movement state and notifies waiters that the car may be idle.
 void Elevator::FinishMove(const std::string& status) {
   {
-    // Reset runtime flags and clear optional fields under lock protection.
+    // Limit the lock scope so waiters can acquire mutex_ after notification.
     std::lock_guard<std::mutex> lock(mutex_);
     busy_ = false;
-    active_request_.reset();  // Clear optional request snapshot.
-    target_floor_.reset();    // Reset optional target floor to nullopt.
 
-    // Determine the next stage and format the final text status.
+    // Clear the active request now that movement has finished.
+    active_request_.reset();
+
+    // Clear the active target so snapshots report no travel direction.
+    target_floor_.reset();
+
     stage_ = status == "Idle" ? ElevatorStage::kIdle : ElevatorStage::kStopped;
     status_ = status + " at floor " + std::to_string(current_floor);
     DisplayFloorLocked();
-  }  // Lock is released here to prevent lock contention during thread
-     // notification.
+  }
 
-  // Notify all threads waiting for the elevator to become idle (e.g.,
-  // WaitUntilIdle()).
+  // Wake WaitUntilIdle() and interruptible sleeps waiting on elevator state.
   idle_cv_.notify_all();
 }
 
-// Formats the current floor display text using a type-safe string stream.
-// REQUIRES: The caller must hold `mutex_` before invoking this function.
+// Refreshes display_text_ from the current floor while mutex_ is held.
 void Elevator::DisplayFloorLocked() {
   std::ostringstream stream;
   stream << "Elevator " << id_ << ": floor " << current_floor;
 
-  // Update the internal display text buffer.
   display_text_ = stream.str();
 }
 
