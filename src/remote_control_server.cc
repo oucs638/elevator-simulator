@@ -242,6 +242,40 @@ bool RemoteControlServer::Start(int port, std::string* error) {
   return true;
 }
 
+// Stops the remote server, wakes blocked sockets, and joins owned threads.
+void RemoteControlServer::Stop() {
+  if (!running_.exchange(false)) {
+    return;
+  }
+
+  // Closing the listening socket releases AcceptLoop() before it is joined.
+  if (server_fd_ >= 0) {
+    shutdown(server_fd_, SHUT_RDWR);
+    close(server_fd_);
+    server_fd_ = -1;
+  }
+
+  if (accept_thread_.joinable()) {
+    accept_thread_.join();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(clients_mutex_);
+    for (const int client_fd : client_fds_) {
+      shutdown(client_fd, SHUT_RDWR);
+    }
+  }
+
+  for (auto& thread : client_threads_) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+
+  client_threads_.clear();
+  port_ = 0;
+}
+
 // Returns whether the remote server is currently accepting clients.
 bool RemoteControlServer::IsRunning() const { return running_; }
 
